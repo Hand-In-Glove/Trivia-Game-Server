@@ -17,7 +17,7 @@ class Games {
         return this.players;
       },
       removePlayer: function (playerID) {
-        return this.players.filter((player) => player.id !== playerID);
+        this.players = this.players.filter((player) => player.id !== playerID);
       },
       incrementPlayerScore: function (playerId) {
         this.players = this.players.map((player) => {
