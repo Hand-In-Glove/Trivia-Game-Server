@@ -18,12 +18,9 @@ const { getQs } = require("./adapters/questions");
 
 const games = new Games();
 
-// const index = require("./routes");
-
 app.use(express.static(path.join(__dirname, "../test_client/")));
 app.use(cors());
 app.use(express.json());
-// app.use(index);
 
 io.on("connection", (socket) => {
   console.log(`user: ${socket.id} - connected`);
@@ -59,7 +56,11 @@ io.on("connection", (socket) => {
         attemptGameCreate();
       }
     };
-    attemptGameCreate();
+    try {
+      attemptGameCreate();
+    } catch (error) {
+      socket.emit("error", { error });
+    }
   });
 
   socket.on("join-game", ({ pin, username }) => {
@@ -69,7 +70,7 @@ io.on("connection", (socket) => {
     // console.log("GAME: ", game);
     if (!game) {
       console.log(`Sorry ${username} No Game Found`);
-      socket.emit("no-game-found");
+      socket.emit("error", { error: { msg: "No Game Found" } });
     }
     if (game.isLive) {
       console.log(`Sorry ${username} Game already started`);
@@ -87,9 +88,12 @@ io.on("connection", (socket) => {
 
   socket.on("host-start", () => {
     const game = games.getGameByHost(socket.id);
-    game.gameData.setRoundQuestion();
-    game.setGameLive();
-    if (game) io.in(game.pin).emit("host-starting", { gamePin: game.pin });
+    if (game) {
+      game.gameData.setRoundQuestion();
+      game.setGameLive();
+      io.in(game.pin).emit("host-starting", { gamePin: game.pin });
+    }
+    if (!game) socket.emit("error", { error: { msg: "No Game Found" } });
   });
 
   socket.on("get-question", ({ pin }) => {
@@ -105,6 +109,7 @@ io.on("connection", (socket) => {
         round,
       });
     }
+    if (!game) socket.emit("error", { error: { msg: "No Game Found" } });
   });
 
   socket.on("player-answer", ({ answer, pin }) => {
@@ -121,71 +126,76 @@ io.on("connection", (socket) => {
         io.in(game.pin).emit("round-over");
       }
     }
+    if (!game) socket.emit("error", { error: { msg: "No Game Found" } });
   });
 
   socket.on("get-results", ({ pin }) => {
     const game = games.getGameByPin(pin);
-    // check for game over
-    console.log("GAME DATA: ", JSON.stringify(game.gameData, null, 2));
-    if (
-      Number(game.gameData.currentRound.round) ===
-      Number(game.gameData.numberOfRounds)
-    ) {
-      game.setGameInactive();
-      const playersByScore = game
-        .getPlayers()
-        .sort((a, b) => a.score - b.score);
-      io.in(game.pin).emit("send-final-results", {
-        results: playersByScore,
-        host: game.hostId,
-      });
-    } else {
-      // add to scores
-      const correctIds = game.gameData.getCorrectIds();
-      correctIds.forEach((id) => game.incrementPlayerScore(id));
-      // send results
-      const correctAnswer = game.gameData.currentRound.question.correctAnswer;
-      const correctPlayers = [];
-      const incorrectPlayers = [];
-      const players = game.getPlayers();
-      players.forEach((player) => {
-        if (correctIds.includes(player.id)) {
-          correctPlayers.push(player);
-        } else {
-          incorrectPlayers.push(player);
-        }
-      });
-      const results = {
-        correctAnswer,
-        correctPlayers,
-        incorrectPlayers,
-      };
-      io.in(game.pin).emit("send-results", {
-        results,
-        host: game.hostId,
-      });
+    if (game) {
+      // check for game over
+      if (
+        Number(game.gameData.currentRound.round) ===
+        Number(game.gameData.numberOfRounds)
+      ) {
+        game.setGameInactive();
+        const playersByScore = game
+          .getPlayers()
+          .sort((a, b) => a.score - b.score);
+        io.in(game.pin).emit("send-final-results", {
+          results: playersByScore,
+          host: game.hostId,
+        });
+      } else {
+        // add to scores
+        const correctIds = game.gameData.getCorrectIds();
+        correctIds.forEach((id) => game.incrementPlayerScore(id));
+        // send results
+        const correctAnswer = game.gameData.currentRound.question.correctAnswer;
+        const correctPlayers = [];
+        const incorrectPlayers = [];
+        const players = game.getPlayers();
+        players.forEach((player) => {
+          if (correctIds.includes(player.id)) {
+            correctPlayers.push(player);
+          } else {
+            incorrectPlayers.push(player);
+          }
+        });
+        const results = {
+          correctAnswer,
+          correctPlayers,
+          incorrectPlayers,
+        };
+        io.in(game.pin).emit("send-results", {
+          results,
+          host: game.hostId,
+        });
+      }
     }
+    if (!game) socket.emit("error", { error: { msg: "No Game Found" } });
   });
 
   socket.on("host-next-round", ({ pin }) => {
     const game = games.getGameByPin(pin);
-    game.gameData.incrementRound();
-    game.gameData.setRoundQuestion();
-    game.gameData.clearAnswers();
-    io.in(game.pin).emit("starting-next-round");
+    if (game) {
+      game.gameData.incrementRound();
+      game.gameData.setRoundQuestion();
+      game.gameData.clearAnswers();
+      io.in(game.pin).emit("starting-next-round");
+    }
+    if (!game) socket.emit("error", { error: { msg: "No Game Found" } });
   });
 
   socket.on("disconnect", () => {
     console.log(`user: ${socket.id} - disconnected`);
+    games.games.forEach((game) => {
+      game.removePlayer(socket.id);
+    });
     const game = games.getGameByHost(socket.id);
     if (game) {
       io.in(game.pin).emit("host-disconnected");
       games.removeGame(socket.id);
     }
-    // games &&
-    //   games.forEach((game) => {
-    //     game.removePlayer(socket.id);
-    //   });
   });
 });
 
